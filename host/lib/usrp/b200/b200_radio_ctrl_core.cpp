@@ -131,7 +131,11 @@ private:
      ******************************************************************/
     UHD_INLINE void send_pkt(const uint32_t addr, const uint32_t data = 0)
     {
-        managed_send_buffer::sptr buff = _ctrl_xport->get_send_buff(0.0);
+        // V14-F4TNK: retry with 500 ms timeout for USB 2.0 over usbipd-win (WSL2).
+        // Original code used get_send_buff(0.0) — zero timeout is intolerant of
+        // the added latency from virtual USB-over-IP, causing intermittent
+        // "fifo ctrl timed out" during CODEC/radio init on USB 2.0.
+        managed_send_buffer::sptr buff = _ctrl_xport->get_send_buff(0.5);
         if (not buff) {
             throw uhd::runtime_error("fifo ctrl timed out getting a send buffer");
         }
