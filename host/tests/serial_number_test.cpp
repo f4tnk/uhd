@@ -23,4 +23,11 @@ BOOST_AUTO_TEST_CASE(test_serial_numbers_match)
 
     // Invalid argument
     BOOST_CHECK_EQUAL(false, uhd::utils::serial_numbers_match("", "abcd123"));
+
+    // Non-hex serials (e.g. LibreSDR "GQTEFBB") — string fallback
+    BOOST_CHECK_EQUAL(true, uhd::utils::serial_numbers_match("GQTEFBB", "GQTEFBB"));
+    BOOST_CHECK_EQUAL(true, uhd::utils::serial_numbers_match("GQTEFBB", "gqtefbb"));
+    BOOST_CHECK_EQUAL(false, uhd::utils::serial_numbers_match("GQTEFBB", "GQTEFBC"));
+    BOOST_CHECK_EQUAL(false, uhd::utils::serial_numbers_match("GQTEFBB", "GQTEFB"));
+    BOOST_CHECK_EQUAL(false, uhd::utils::serial_numbers_match("", ""));
 }
