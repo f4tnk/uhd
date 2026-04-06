@@ -18,12 +18,19 @@
 //  the setting was sent.
 //
 // Note -- if t0 is the requested time, the actual send time on the setting bus is t0 + 1 cycle.
+//
+// F4TNK: added resp_tready watchdog (RESP_WATCHDOG_CYCLES, default 2s @ 32MHz).
+// If resp_tready stays 0 while in RC_RESP_* states (USB session drop without FPGA reload),
+// the state machine would block forever because ctrl_tready=0 in default case.
+// After WATCHDOG cycles, assert watchdog_clear for 1 cycle → b200_core resets mux+fifo.
 
 module radio_ctrl_proc
+  #(parameter RESP_WATCHDOG_CYCLES = 27'd64_000_000)  // 2s @ 32MHz — recover from USB session drop
   (input clk, input reset, input clear,
    
    input [63:0] ctrl_tdata, input ctrl_tlast, input ctrl_tvalid, output reg ctrl_tready,
    output reg [63:0] resp_tdata, output reg resp_tlast, output resp_tvalid, input resp_tready,
+   output reg watchdog_clear,
    
    input [63:0] vita_time,
 
@@ -52,32 +59,41 @@ module radio_ctrl_proc
    wire 	 now, late, go;
    reg [11:0] 	 seqnum;
    reg [31:0] 	 sid;
+
+   // Watchdog counter — tracks cycles stuck in RC_RESP_* with resp_tready=0
+   reg [26:0]    resp_wdog_cnt;
    
    always @(posedge clk)
-     if(reset)
+     if(reset | clear)
        begin
 	  rc_state <= RC_HEAD;
 	  HAS_TIME_reg <= 1'b0;
 	  sid <= 32'd0;
 	  seqnum <= 12'd0;
+	  resp_wdog_cnt <= 27'd0;
+	  watchdog_clear <= 1'b0;
        end
      else
 	 case(rc_state)
 	   RC_HEAD :
-	     if(ctrl_tvalid)
-	       begin
-		  sid <= ctrl_tdata[31:0];
-		  seqnum <= ctrl_tdata[59:48];
-		  HAS_TIME_reg <= HAS_TIME;
-		  if(IS_EC)
-		    if(HAS_TIME)
-		      rc_state <= RC_TIME;
-		    else
-		      rc_state <= RC_DATA;
-		  else
-		    if(~ctrl_tlast)
-		      rc_state <= RC_DUMP;
-	       end
+	     begin
+	        watchdog_clear <= 1'b0;
+	        resp_wdog_cnt  <= 27'd0;
+	        if(ctrl_tvalid)
+	          begin
+		     sid <= ctrl_tdata[31:0];
+		     seqnum <= ctrl_tdata[59:48];
+		     HAS_TIME_reg <= HAS_TIME;
+		     if(IS_EC)
+		       if(HAS_TIME)
+		         rc_state <= RC_TIME;
+		       else
+		         rc_state <= RC_DATA;
+		     else
+		       if(~ctrl_tlast)
+		         rc_state <= RC_DUMP;
+	          end
+	     end
 	   
 	   RC_TIME :
 	     if(ctrl_tvalid)
@@ -100,16 +116,40 @@ module radio_ctrl_proc
 		 rc_state <= RC_RESP_HEAD;
 
 	   RC_RESP_HEAD :
-	     if(resp_tready)
-	       rc_state <= RC_RESP_TIME;
+	     if(resp_tready) begin
+	        rc_state <= RC_RESP_TIME;
+		resp_wdog_cnt <= 27'd0;
+             end else if (resp_wdog_cnt >= RESP_WATCHDOG_CYCLES - 1) begin
+	        // USB session drop: resp_tready stuck LOW — force recovery
+                // Assert watchdog_clear for 1 cycle to reset mux+fifo in b200_core
+	        rc_state <= RC_HEAD;
+	        watchdog_clear <= 1'b1;
+	        resp_wdog_cnt  <= 27'd0;
+             end else
+	        resp_wdog_cnt <= resp_wdog_cnt + 1;
 
 	   RC_RESP_TIME :
-	     if(resp_tready)
-	       rc_state <= RC_RESP_DATA;
+	     if(resp_tready) begin
+	        rc_state <= RC_RESP_DATA;
+		resp_wdog_cnt <= 27'd0;
+             end else if (resp_wdog_cnt >= RESP_WATCHDOG_CYCLES - 1) begin
+	        rc_state <= RC_HEAD;
+	        watchdog_clear <= 1'b1;
+	        resp_wdog_cnt  <= 27'd0;
+             end else
+	        resp_wdog_cnt <= resp_wdog_cnt + 1;
 
 	   RC_RESP_DATA:
-	     if(resp_tready)
-	       rc_state <= RC_HEAD;
+	     if(resp_tready) begin
+	        rc_state <= RC_HEAD;
+             end else if (resp_wdog_cnt >= RESP_WATCHDOG_CYCLES - 1) begin
+	        // DATA state has resp_tlast=1; mux should have consumed it,
+	        // but if still stuck, recover anyway
+	        rc_state <= RC_HEAD;
+	        watchdog_clear <= 1'b1;
+	        resp_wdog_cnt  <= 27'd0;
+             end else
+	        resp_wdog_cnt <= resp_wdog_cnt + 1;
 	   
 	   default :
 	     rc_state <= RC_HEAD;

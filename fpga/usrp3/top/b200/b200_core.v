@@ -124,8 +124,13 @@ module b200_core
     wire [63:0] u0_resp_tdata; wire u0_resp_tlast, u0_resp_tvalid, u0_resp_tready;
     wire [63:0] l0_resp_tdata; wire l0_resp_tlast, l0_resp_tvalid, l0_resp_tready;
 
+    // F4TNK: radio_ctrl_watchdog_clear is asserted for 1 cycle by radio_ctrl_proc
+    // when resp_tready is stuck LOW for RESP_WATCHDOG_CYCLES (2s @ 32MHz).
+    // Clears mux+fifo so the next Device::make() starts from a clean state.
+    wire radio_ctrl_watchdog_clear;
+
     axi_mux4 #(.WIDTH(64), .BUFFER(1)) mux_for_resp
-     (.clk(bus_clk), .reset(bus_rst), .clear(1'b0),
+     (.clk(bus_clk), .reset(bus_rst), .clear(radio_ctrl_watchdog_clear),
       .i0_tdata(r0_resp_tdata), .i0_tlast(r0_resp_tlast), .i0_tvalid(r0_resp_tvalid), .i0_tready(r0_resp_tready),
       .i1_tdata(r1_resp_tdata), .i1_tlast(r1_resp_tlast), .i1_tvalid(r1_resp_tvalid), .i1_tready(r1_resp_tready),
       .i2_tdata(u0_resp_tdata), .i2_tlast(u0_resp_tlast), .i2_tvalid(u0_resp_tvalid), .i2_tready(u0_resp_tready),
@@ -197,15 +202,16 @@ module b200_core
 
     axi_fifo #(.WIDTH(65), .SIZE(5)) radio_ctrl_proc_timing_fifo
     (
-        .clk(bus_clk), .reset(bus_rst), .clear(1'b0),
+        .clk(bus_clk), .reset(bus_rst), .clear(radio_ctrl_watchdog_clear),
         .i_tdata({l0_ctrl_tlast, l0_ctrl_tdata}), .i_tvalid(l0_ctrl_tvalid), .i_tready(l0_ctrl_tready), .space(),
         .o_tdata({l0i_ctrl_tlast, l0i_ctrl_tdata}), .o_tvalid(l0i_ctrl_tvalid), .o_tready(l0i_ctrl_tready), .occupied()
     );
 
     radio_ctrl_proc radio_ctrl_proc
-     (.clk(bus_clk), .reset(bus_rst), .clear(1'b0),
+     (.clk(bus_clk), .reset(bus_rst), .clear(radio_ctrl_watchdog_clear),
       .ctrl_tdata(l0i_ctrl_tdata), .ctrl_tlast(l0i_ctrl_tlast), .ctrl_tvalid(l0i_ctrl_tvalid), .ctrl_tready(l0i_ctrl_tready),
       .resp_tdata(l0_resp_tdata), .resp_tlast(l0_resp_tlast), .resp_tvalid(l0_resp_tvalid), .resp_tready(l0_resp_tready),
+      .watchdog_clear(radio_ctrl_watchdog_clear),
       .vita_time(64'b0),
       .set_stb(set_stb), .set_addr(set_addr), .set_data(set_data),
       .ready(spi_ready), .readback(rb_data),
